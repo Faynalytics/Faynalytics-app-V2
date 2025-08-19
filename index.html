@@ -333,7 +333,7 @@
                     <i class="fas fa-clock"></i>
                     <span>Market Sessions</span>
                 </a>
-                <a href="#" class="#" data-section="settings">
+                <a href="#" class="nav-item" data-section="settings">
                     <i class="fas fa-cog"></i>
                     <span>Settings</span>
                 </a>
@@ -931,6 +931,8 @@
         const CLIENT_ID = '785515460632-mkritbmoj148ogofsvvndb1nsch8que2.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyBjCi7NLfdJGcLGM3sWW5wGqRT58arVj6c';
         const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile';
+        const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
+
 
         // Google API variables
         let gapiInited = false;
@@ -939,17 +941,15 @@
         let googleAccessToken = null;
         let googleUserId = null;
         let authReady = false;
-        
+
         // ========================================================================
         // FONCTIONS D'INITIALISATION ET DE GESTION DE GOOGLE DRIVE (PORTÉE GLOBALE)
         // ========================================================================
         
-        // Appelé par le script gapi.js
         function gapiLoaded() {
             gapi.load('client', initializeGapiClient);
         }
 
-        // Appelé par le script gsi/client
         function gisLoaded() {
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
@@ -973,7 +973,7 @@
             try {
                 await gapi.client.init({
                     apiKey: API_KEY,
-                    discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"]
+                    discoveryDocs: DISCOVERY_DOCS,
                 });
                 gapiInited = true;
                 maybeEnableGoogleAuthButtons();
@@ -997,11 +997,11 @@
         }
         
         function handleAuthClick() {
-            if (tokenClient) {
-                tokenClient.requestAccessToken({ prompt: 'consent' });
-            } else {
+            if (!authReady) {
                 showToast("Google client not ready. Please try refreshing the page.", 'warning');
+                return;
             }
+            tokenClient.requestAccessToken({ prompt: 'consent' });
         }
 
         function handleSignoutClick() {
@@ -1045,7 +1045,154 @@
                 userDisplay.classList.add('hidden');
             }
         }
+
+        async function fetchUserInfo() {
+            try {
+                const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                    headers: { 'Authorization': `Bearer ${googleAccessToken}` }
+                });
+                if (response.ok) {
+                    const userInfo = await response.json();
+                    googleUserId = userInfo.id;
+                    document.getElementById('userNameDisplay').textContent = `Welcome, ${userInfo.given_name || 'Trader'}!`;
+                }
+            } catch (error) {
+                console.error('Failed to fetch user info:', error);
+            }
+        }
         
+        const APP_FOLDER_NAME = 'Faynalytics Data';
+        let appFolderId = null;
+
+        async function getAppFolderId() {
+            if (appFolderId) return appFolderId;
+            try {
+                const res = await gapi.client.drive.files.list({
+                    q: `mimeType='application/vnd.google-apps.folder' and name='${APP_FOLDER_NAME}'`,
+                    fields: 'files(id)'
+                });
+                if (res.result.files.length > 0) {
+                    appFolderId = res.result.files[0].id;
+                } else {
+                    const createRes = await gapi.client.drive.files.create({
+                        resource: { name: APP_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' },
+                        fields: 'id'
+                    });
+                    appFolderId = createRes.result.id;
+                }
+                return appFolderId;
+            } catch (err) {
+                showToast("Error getting Drive folder.", 'error');
+                throw err;
+            }
+        }
+
+        function getJournalFileName() {
+            return `faynalytics_journal_${googleUserId || 'local'}.json`;
+        }
+        
+        async function saveJournalToDrive() {
+            if (!googleAccessToken) return showToast("Please connect to Google Drive first.", 'warning');
+            showLoading();
+            try {
+                const folderId = await getAppFolderId();
+                const fileName = getJournalFileName();
+                const fileContent = JSON.stringify(appState.journalEntries);
+                
+                const searchRes = await gapi.client.drive.files.list({
+                    q: `'${folderId}' in parents and name='${fileName}'`, fields: 'files(id)'
+                });
+                
+                const fileId = searchRes.result.files.length > 0 ? searchRes.result.files[0].id : null;
+
+                const metadata = { name: fileName, mimeType: 'application/json' };
+                const blob = new Blob([fileContent], { type: 'application/json' });
+                
+                let url;
+                let method;
+                const form = new FormData();
+
+                if (fileId) {
+                    // Update existing file: use PATCH and don't include parents
+                    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
+                    method = 'PATCH';
+                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                    form.append('file', blob);
+                } else {
+                    // Create a new file: use POST and include parents
+                    url = `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+                    method = 'POST';
+                    metadata.parents = [folderId];
+                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                    form.append('file', blob);
+                }
+
+                const res = await fetch(url, {
+                    method: method,
+                    headers: { 'Authorization': `Bearer ${googleAccessToken}` },
+                    body: form
+                });
+
+                if (!res.ok) {
+                    throw new Error(await res.text());
+                }
+
+                showToast("Journal saved successfully to Google Drive!", 'success');
+            } catch (err) {
+                console.error("Error saving to Drive:", err);
+                showToast("Failed to save to Google Drive.", 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function loadJournalFromDrive() {
+            if (!googleAccessToken) return showToast("Please connect to Google Drive first.", 'warning');
+            showLoading();
+            try {
+                const folderId = await getAppFolderId();
+                const fileName = getJournalFileName();
+                
+                const searchRes = await gapi.client.drive.files.list({
+                    q: `'${folderId}' in parents and name='${fileName}'`, fields: 'files(id)'
+                });
+                
+                if (searchRes.result.files.length > 0) {
+                    const fileId = searchRes.result.files[0].id;
+                    const res = await gapi.client.drive.files.get({ fileId: fileId, alt: 'media' });
+                    
+                    if (res.status === 200 && res.result) {
+                        try {
+                            appState.journalEntries = JSON.parse(JSON.stringify(res.result));
+                            saveJournalEntriesLocallyOnly();
+                            loadData();
+                            showToast("Journal loaded from Google Drive!", 'success');
+                        } catch (jsonErr) {
+                            console.error("Failed to parse JSON from Drive:", jsonErr);
+                            showToast("Failed to load journal: invalid file format.", 'error');
+                            appState.journalEntries = [];
+                            saveJournalEntriesLocallyOnly();
+                            loadData();
+                        }
+                    } else {
+                        showToast("Journal file found but is empty or unreadable. Using local data.", 'info');
+                        appState.journalEntries = [];
+                        saveJournalEntriesLocallyOnly();
+                        loadData();
+                    }
+                } else {
+                    showToast("No journal file found on Google Drive. Using local data.", 'info');
+                    loadJournalEntriesLocallyOnly();
+                    loadData();
+                }
+            } catch (err) {
+                console.error("Error loading from Drive:", err);
+                showToast("Failed to load journal from Google Drive.", 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+
         // ========================================================================
         // AUTRES FONCTIONS DE L'APPLICATION
         // ========================================================================
@@ -1059,37 +1206,30 @@
         });
 
         function initializeApp() {
-            // Set theme
             document.documentElement.setAttribute('data-theme', appState.theme);
         }
 
         function initializeEventListeners() {
-            // Theme toggle
             document.getElementById('themeToggle').addEventListener('click', toggleTheme);
             document.getElementById('settingsThemeToggle').addEventListener('click', toggleTheme);
             
-            // Navigation
             document.querySelectorAll('.nav-item').forEach(item => {
                 item.addEventListener('click', handleNavigation);
             });
             
-            // Sidebar toggle
             document.getElementById('menuToggle').addEventListener('click', toggleSidebar);
             document.getElementById('closeSidebar').addEventListener('click', closeSidebar);
             document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
             
-            // Calculator
             document.getElementById('currencyPair').addEventListener('change', updateCalculatorUI);
             document.getElementById('stopLossInputMethod').addEventListener('change', updateCalculatorUI);
             
-            // Journal
             document.getElementById('journalAssetSelect').addEventListener('change', updateJournalUI);
             document.getElementById('filterAssetSelect').addEventListener('change', applyFiltersAndSort);
             document.getElementById('filterTradeType').addEventListener('change', applyFiltersAndSort);
             document.getElementById('sortBy').addEventListener('change', applyFiltersAndSort);
             document.getElementById('sortOrder').addEventListener('change', applyFiltersAndSort);
             
-            // Google Auth
             setupGoogleAuthListeners();
         }
 
@@ -1110,16 +1250,14 @@
             document.getElementById('journalDate').value = today;
         }
 
-        // Theme Management
         function toggleTheme() {
             appState.theme = appState.theme === 'light' ? 'dark' : 'light';
             document.documentElement.setAttribute('data-theme', appState.theme);
             localStorage.setItem('theme', appState.theme);
             showToast('Theme changed to ' + appState.theme + ' mode', 'info');
-            updateAllCharts(); // Update charts when theme changes
+            updateAllCharts();
         }
 
-        // Navigation
         function handleNavigation(e) {
             e.preventDefault();
             const section = e.currentTarget.dataset.section;
@@ -1160,7 +1298,6 @@
             activeItem.classList.add('active');
         }
 
-        // Sidebar Management
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
@@ -1177,7 +1314,6 @@
             overlay.classList.remove('active');
         }
 
-        // Toast Notifications
         function showToast(message, type = 'info', duration = 3000) {
             const toastContainer = document.getElementById('toastContainer');
             const toast = document.createElement('div');
@@ -1206,7 +1342,6 @@
             }, duration);
         }
 
-        // Loading Management
         function showLoading() {
             document.getElementById('loadingOverlay').classList.remove('hidden');
         }
@@ -1215,7 +1350,6 @@
             document.getElementById('loadingOverlay').classList.add('hidden');
         }
 
-        // Data Management
         function loadData() {
             loadJournalEntries();
             loadPerformanceGoal();
@@ -1288,8 +1422,7 @@
         function getJournalFileName() {
             return `faynalytics_journal_${googleUserId || 'local'}.json`;
         }
-
-        // Fonction corrigée
+        
         async function saveJournalToDrive() {
             if (!googleAccessToken) return showToast("Please connect to Google Drive first.", 'warning');
             showLoading();
@@ -1299,38 +1432,37 @@
                 const fileContent = JSON.stringify(appState.journalEntries);
                 
                 const searchRes = await gapi.client.drive.files.list({
-                    q: `'${folderId}' in parents and name='${fileName}'`,
-                    fields: 'files(id)'
+                    q: `'${folderId}' in parents and name='${fileName}'`, fields: 'files(id)'
                 });
                 
                 const fileId = searchRes.result.files.length > 0 ? searchRes.result.files[0].id : null;
 
-                let metadata = { name: fileName, mimeType: 'application/json' };
+                const metadata = { name: fileName, mimeType: 'application/json' };
+                const blob = new Blob([fileContent], { type: 'application/json' });
+                
                 let url;
                 let method;
+                const form = new FormData();
 
                 if (fileId) {
-                    // Mise à jour d'un fichier existant
                     url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
                     method = 'PATCH';
+                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                    form.append('file', blob);
                 } else {
-                    // Création d'un nouveau fichier
                     url = `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
                     method = 'POST';
                     metadata.parents = [folderId];
+                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                    form.append('file', blob);
                 }
-
-                const blob = new Blob([fileContent], { type: 'application/json' });
-                const form = new FormData();
-                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                form.append('file', blob);
 
                 const res = await fetch(url, {
                     method: method,
                     headers: { 'Authorization': `Bearer ${googleAccessToken}` },
                     body: form
                 });
-                
+
                 if (!res.ok) {
                     throw new Error(await res.text());
                 }
@@ -1344,8 +1476,6 @@
             }
         }
 
-
-        // Fonction corrigée
         async function loadJournalFromDrive() {
             if (!googleAccessToken) return showToast("Please connect to Google Drive first.", 'warning');
             showLoading();
@@ -1354,34 +1484,31 @@
                 const fileName = getJournalFileName();
                 
                 const searchRes = await gapi.client.drive.files.list({
-                    q: `'${folderId}' in parents and name='${fileName}'`,
-                    fields: 'files(id)'
+                    q: `'${folderId}' in parents and name='${fileName}'`, fields: 'files(id)'
                 });
                 
                 if (searchRes.result.files.length > 0) {
                     const fileId = searchRes.result.files[0].id;
                     const res = await gapi.client.drive.files.get({ fileId: fileId, alt: 'media' });
                     
-                    if (res.status === 200) {
-                        // Tenter de parser le résultat comme JSON
+                    if (res.status === 200 && res.result) {
                         try {
-                            appState.journalEntries = res.result;
-                            if (appState.journalEntries.length > 0) {
-                                showToast("Journal loaded from Google Drive!", 'success');
-                            } else {
-                                showToast("Journal file found but is empty. Using local data.", 'info');
-                            }
+                            appState.journalEntries = JSON.parse(JSON.stringify(res.result));
+                            saveJournalEntriesLocallyOnly();
+                            loadData();
+                            showToast("Journal loaded from Google Drive!", 'success');
                         } catch (jsonErr) {
-                            // Si la réponse n'est pas un JSON valide
                             console.error("Failed to parse JSON from Drive:", jsonErr);
                             showToast("Failed to load journal: invalid file format.", 'error');
                             appState.journalEntries = [];
-                        } finally {
                             saveJournalEntriesLocallyOnly();
                             loadData();
                         }
                     } else {
-                        throw new Error(`Failed to load file: ${res.status}`);
+                        showToast("Journal file found but is empty or unreadable. Using local data.", 'info');
+                        appState.journalEntries = [];
+                        saveJournalEntriesLocallyOnly();
+                        loadData();
                     }
                 } else {
                     showToast("No journal file found on Google Drive. Using local data.", 'info');
@@ -1395,7 +1522,6 @@
                 hideLoading();
             }
         }
-        // Calculator Logic
         function updateCalculatorUI() {
             const method = document.getElementById('stopLossInputMethod').value;
             document.getElementById('pipsDirectInputContainer').classList.toggle('hidden', method !== 'pips_direct');
@@ -1463,7 +1589,6 @@
             resultBox.classList.remove('hidden');
         }
 
-        // Journal Logic
         function updateJournalUI() {
             const select = document.getElementById('journalAssetSelect');
             const customInput = document.getElementById('journalAssetCustom');
@@ -1639,7 +1764,6 @@
             });
         }
         
-        // Performance & Analytics Logic
         function updateDashboardMetrics() {
             const nonDraftEntries = appState.journalEntries.filter(e => !e.is_draft);
             const totalTrades = nonDraftEntries.length;
