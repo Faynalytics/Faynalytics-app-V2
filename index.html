@@ -905,8 +905,8 @@
         </div>
     </div>
 
-    <script async defer src="https://apis.google.com/js/api.js"></script>
-    <script async defer src="https://accounts.google.com/gsi/client"></script>
+    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
 
     <script>
         // Application State
@@ -938,6 +938,59 @@
         let tokenClient;
         let googleAccessToken = null;
         let googleUserId = null;
+        let authReady = false;
+
+        // New global functions to be called by Google API scripts
+        function gapiLoaded() {
+            gapi.load('client', initializeGapiClient);
+        }
+
+        function gisLoaded() {
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                callback: (tokenResponse) => {
+                    if (tokenResponse && tokenResponse.access_token) {
+                        googleAccessToken = tokenResponse.access_token;
+                        gapi.client.setToken(tokenResponse);
+                        updateAuthUI(true);
+                        showToast("Connected to Google Drive!", 'success');
+                    } else {
+                        showToast("Failed to connect to Google Drive.", 'error');
+                    }
+                }
+            });
+            gisInited = true;
+            maybeEnableGoogleAuthButtons();
+        }
+
+        async function initializeGapiClient() {
+            try {
+                await gapi.client.init({
+                    apiKey: API_KEY,
+                    discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"]
+                });
+                gapiInited = true;
+                maybeEnableGoogleAuthButtons();
+            } catch (error) {
+                console.error("Error initializing GAPI client:", error);
+                showToast("Failed to initialize Google API. Check network and API key.", 'error');
+            }
+        }
+        
+        function maybeEnableGoogleAuthButtons() {
+            if (gapiInited && gisInited) {
+                // Check if already signed in on page load
+                const token = gapi.client.getToken();
+                if (token && token.access_token) {
+                    googleAccessToken = token.access_token;
+                    updateAuthUI(true);
+                } else {
+                    updateAuthUI(false);
+                }
+                authReady = true;
+            }
+        }
 
         // Initialize Application
         document.addEventListener('DOMContentLoaded', function() {
@@ -950,22 +1003,6 @@
         function initializeApp() {
             // Set theme
             document.documentElement.setAttribute('data-theme', appState.theme);
-            
-            // Initialize Google APIs
-            if (typeof gapi !== 'undefined') {
-                gapi.load('client', initializeGapiClient);
-            }
-            
-            if (typeof google !== 'undefined') {
-                gisLoaded();
-            }
-            
-            // Show initial section
-            showSection('dashboard');
-            
-            // Update trading sessions
-            updateTradingSessionStatus();
-            setInterval(updateTradingSessionStatus, 60000);
         }
 
         function initializeEventListeners() {
@@ -1149,76 +1186,6 @@
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(appState.journalEntries));
         }
 
-        // Google API integration
-        async function initializeGapiClient() {
-            try {
-                await gapi.client.init({
-                    apiKey: API_KEY,
-                    discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"]
-                });
-                gapiInited = true;
-                maybeEnableGoogleAuthButtons();
-            } catch (error) {
-                console.error("Error initializing GAPI client:", error);
-                showToast("Failed to initialize Google API. Check network and API key.", 'error');
-            }
-        }
-        
-        function gisLoaded() {
-            tokenClient = google.accounts.oauth2.initTokenClient({
-                client_id: CLIENT_ID,
-                scope: SCOPES,
-                callback: (tokenResponse) => {
-                    if (tokenResponse && tokenResponse.access_token) {
-                        googleAccessToken = tokenResponse.access_token;
-                        gapi.client.setToken(tokenResponse);
-                        updateAuthUI(true);
-                        showToast("Connected to Google Drive!", 'success');
-                    } else {
-                        showToast("Failed to connect to Google Drive.", 'error');
-                    }
-                }
-            });
-            gisInited = true;
-            maybeEnableGoogleAuthButtons();
-        }
-
-        function maybeEnableGoogleAuthButtons() {
-            if (gapiInited && gisInited) {
-                const token = gapi.client.getToken();
-                if (token && token.access_token) {
-                    googleAccessToken = token.access_token;
-                    updateAuthUI(true);
-                } else {
-                    updateAuthUI(false);
-                }
-            }
-        }
-
-        function handleAuthClick() {
-            if (tokenClient) {
-                tokenClient.requestAccessToken({ prompt: 'consent' });
-            } else {
-                showToast("Google client not ready. Please try refreshing the page.", 'warning');
-            }
-        }
-
-        function handleSignoutClick() {
-            const token = gapi.client.getToken();
-            if (token) {
-                google.accounts.oauth2.revoke(token.access_token, () => {
-                    gapi.client.setToken('');
-                    googleAccessToken = null;
-                    googleUserId = null;
-                    updateAuthUI(false);
-                    appState.journalEntries = [];
-                    saveJournalEntriesLocallyOnly();
-                    loadData();
-                    showToast("Signed out from Google Drive.", 'info');
-                });
-            }
-        }
-        
         async function updateAuthUI(isSignedIn) {
             const authBtn = document.getElementById('authorizeButton');
             const signoutBtn = document.getElementById('signoutButton');
@@ -1544,9 +1511,9 @@
                     valA = new Date(valA).getTime();
                     valB = new Date(valB).getTime();
                 } else if (typeof valA === 'string') {
-                    return sortOrder === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                    return sortOrder === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(a);
                 }
-                return sortOrder === 'asc' ? valA - valB : valB - a;
+                return sortOrder === 'asc' ? valA - valB : valB - valA;
             });
 
             renderJournalEntries(filtered);
