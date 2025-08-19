@@ -933,7 +933,6 @@
         const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile';
         const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
 
-
         // Google API variables
         let gapiInited = false;
         let gisInited = false;
@@ -941,15 +940,17 @@
         let googleAccessToken = null;
         let googleUserId = null;
         let authReady = false;
-
+        
         // ========================================================================
         // FONCTIONS D'INITIALISATION ET DE GESTION DE GOOGLE DRIVE (PORTÉE GLOBALE)
         // ========================================================================
         
+        // Callback function for gapi.js script
         function gapiLoaded() {
             gapi.load('client', initializeGapiClient);
         }
 
+        // Callback function for gsi/client script
         function gisLoaded() {
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
@@ -1105,27 +1106,23 @@
                 
                 const fileId = searchRes.result.files.length > 0 ? searchRes.result.files[0].id : null;
 
-                const metadata = { name: fileName, mimeType: 'application/json' };
-                const blob = new Blob([fileContent], { type: 'application/json' });
-                
+                let metadata = { name: fileName, mimeType: 'application/json' };
                 let url;
                 let method;
-                const form = new FormData();
 
                 if (fileId) {
-                    // Update existing file: use PATCH and don't include parents
                     url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
                     method = 'PATCH';
-                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                    form.append('file', blob);
                 } else {
-                    // Create a new file: use POST and include parents
                     url = `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
                     method = 'POST';
                     metadata.parents = [folderId];
-                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                    form.append('file', blob);
                 }
+                
+                const blob = new Blob([fileContent], { type: 'application/json' });
+                const form = new FormData();
+                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                form.append('file', blob);
 
                 const res = await fetch(url, {
                     method: method,
@@ -1163,7 +1160,7 @@
                     
                     if (res.status === 200 && res.result) {
                         try {
-                            appState.journalEntries = JSON.parse(JSON.stringify(res.result));
+                            appState.journalEntries = res.result;
                             saveJournalEntriesLocallyOnly();
                             loadData();
                             showToast("Journal loaded from Google Drive!", 'success');
@@ -1196,8 +1193,7 @@
         // ========================================================================
         // AUTRES FONCTIONS DE L'APPLICATION
         // ========================================================================
-
-        // Initialize Application
+        
         document.addEventListener('DOMContentLoaded', function() {
             initializeApp();
             initializeEventListeners();
@@ -1393,8 +1389,6 @@
             }
         }
         
-        const APP_FOLDER_NAME = 'Faynalytics Data';
-        let appFolderId = null;
 
         async function getAppFolderId() {
             if (appFolderId) return appFolderId;
@@ -1437,25 +1431,23 @@
                 
                 const fileId = searchRes.result.files.length > 0 ? searchRes.result.files[0].id : null;
 
-                const metadata = { name: fileName, mimeType: 'application/json' };
-                const blob = new Blob([fileContent], { type: 'application/json' });
-                
+                let metadata = { name: fileName, mimeType: 'application/json' };
                 let url;
                 let method;
-                const form = new FormData();
 
                 if (fileId) {
                     url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
                     method = 'PATCH';
-                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                    form.append('file', blob);
                 } else {
                     url = `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
                     method = 'POST';
                     metadata.parents = [folderId];
-                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                    form.append('file', blob);
                 }
+                
+                const blob = new Blob([fileContent], { type: 'application/json' });
+                const form = new FormData();
+                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                form.append('file', blob);
 
                 const res = await fetch(url, {
                     method: method,
@@ -1491,14 +1483,22 @@
                     const fileId = searchRes.result.files[0].id;
                     const res = await gapi.client.drive.files.get({ fileId: fileId, alt: 'media' });
                     
-                    if (res.status === 200 && res.result) {
+                    if (res.status === 200) {
                         try {
-                            appState.journalEntries = JSON.parse(JSON.stringify(res.result));
+                            // res.result is already the JSON object from the file
+                            // no need for JSON.parse, it's already done by the gapi client
+                            appState.journalEntries = res.result;
+
+                            // Ensure data is an array for safety
+                            if (!Array.isArray(appState.journalEntries)) {
+                                throw new Error('Loaded data is not an array.');
+                            }
+
                             saveJournalEntriesLocallyOnly();
                             loadData();
                             showToast("Journal loaded from Google Drive!", 'success');
                         } catch (jsonErr) {
-                            console.error("Failed to parse JSON from Drive:", jsonErr);
+                            console.error("Failed to process data from Drive:", jsonErr);
                             showToast("Failed to load journal: invalid file format.", 'error');
                             appState.journalEntries = [];
                             saveJournalEntriesLocallyOnly();
@@ -1522,6 +1522,7 @@
                 hideLoading();
             }
         }
+
         function updateCalculatorUI() {
             const method = document.getElementById('stopLossInputMethod').value;
             document.getElementById('pipsDirectInputContainer').classList.toggle('hidden', method !== 'pips_direct');
