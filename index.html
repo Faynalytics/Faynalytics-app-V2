@@ -333,7 +333,7 @@
                     <i class="fas fa-clock"></i>
                     <span>Market Sessions</span>
                 </a>
-                <a href="#" class="nav-item" data-section="settings">
+                <a href="#" class="#" data-section="settings">
                     <i class="fas fa-cog"></i>
                     <span>Settings</span>
                 </a>
@@ -939,12 +939,17 @@
         let googleAccessToken = null;
         let googleUserId = null;
         let authReady = false;
-
-        // New global functions to be called by Google API scripts
+        
+        // ========================================================================
+        // FONCTIONS D'INITIALISATION ET DE GESTION DE GOOGLE DRIVE (PORTÉE GLOBALE)
+        // ========================================================================
+        
+        // Appelé par le script gapi.js
         function gapiLoaded() {
             gapi.load('client', initializeGapiClient);
         }
 
+        // Appelé par le script gsi/client
         function gisLoaded() {
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
@@ -980,7 +985,6 @@
         
         function maybeEnableGoogleAuthButtons() {
             if (gapiInited && gisInited) {
-                // Check if already signed in on page load
                 const token = gapi.client.getToken();
                 if (token && token.access_token) {
                     googleAccessToken = token.access_token;
@@ -991,6 +995,60 @@
                 authReady = true;
             }
         }
+        
+        function handleAuthClick() {
+            if (tokenClient) {
+                tokenClient.requestAccessToken({ prompt: 'consent' });
+            } else {
+                showToast("Google client not ready. Please try refreshing the page.", 'warning');
+            }
+        }
+
+        function handleSignoutClick() {
+            const token = gapi.client.getToken();
+            if (token) {
+                google.accounts.oauth2.revoke(token.access_token, () => {
+                    gapi.client.setToken('');
+                    googleAccessToken = null;
+                    googleUserId = null;
+                    updateAuthUI(false);
+                    appState.journalEntries = [];
+                    saveJournalEntriesLocallyOnly();
+                    loadData();
+                    showToast("Signed out from Google Drive.", 'info');
+                });
+            }
+        }
+        
+        async function updateAuthUI(isSignedIn) {
+            const authBtn = document.getElementById('authorizeButton');
+            const signoutBtn = document.getElementById('signoutButton');
+            const saveBtn = document.getElementById('saveToDriveButton');
+            const loadBtn = document.getElementById('loadFromDriveButton');
+            const statusDiv = document.getElementById('driveStatus');
+            const userDisplay = document.getElementById('userNameDisplay');
+
+            if (isSignedIn) {
+                authBtn.classList.add('hidden');
+                signoutBtn.classList.remove('hidden');
+                saveBtn.classList.remove('hidden');
+                loadBtn.classList.remove('hidden');
+                statusDiv.textContent = 'Connected to Google Drive.';
+                userDisplay.classList.remove('hidden');
+                await fetchUserInfo();
+            } else {
+                authBtn.classList.remove('hidden');
+                signoutBtn.classList.add('hidden');
+                saveBtn.classList.add('hidden');
+                loadBtn.classList.add('hidden');
+                statusDiv.textContent = 'Not connected to Google Drive.';
+                userDisplay.classList.add('hidden');
+            }
+        }
+        
+        // ========================================================================
+        // AUTRES FONCTIONS DE L'APPLICATION
+        // ========================================================================
 
         // Initialize Application
         document.addEventListener('DOMContentLoaded', function() {
@@ -1184,32 +1242,6 @@
 
         function saveJournalEntriesLocallyOnly() {
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(appState.journalEntries));
-        }
-
-        async function updateAuthUI(isSignedIn) {
-            const authBtn = document.getElementById('authorizeButton');
-            const signoutBtn = document.getElementById('signoutButton');
-            const saveBtn = document.getElementById('saveToDriveButton');
-            const loadBtn = document.getElementById('loadFromDriveButton');
-            const statusDiv = document.getElementById('driveStatus');
-            const userDisplay = document.getElementById('userNameDisplay');
-
-            if (isSignedIn) {
-                authBtn.classList.add('hidden');
-                signoutBtn.classList.remove('hidden');
-                saveBtn.classList.remove('hidden');
-                loadBtn.classList.remove('hidden');
-                statusDiv.textContent = 'Connected to Google Drive.';
-                userDisplay.classList.remove('hidden');
-                await fetchUserInfo();
-            } else {
-                authBtn.classList.remove('hidden');
-                signoutBtn.classList.add('hidden');
-                saveBtn.classList.add('hidden');
-                loadBtn.classList.add('hidden');
-                statusDiv.textContent = 'Not connected to Google Drive.';
-                userDisplay.classList.add('hidden');
-            }
         }
 
         async function fetchUserInfo() {
