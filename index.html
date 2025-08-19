@@ -940,18 +940,18 @@
         let googleAccessToken = null;
         let googleUserId = null;
         let authReady = false;
-        
+
         // ========================================================================
         // FONCTIONS D'INITIALISATION ET DE GESTION DE GOOGLE DRIVE (PORTÉE GLOBALE)
         // ========================================================================
-        
-        // Callback function for gapi.js script
-        function gapiLoaded() {
+
+        // Les fonctions ci-dessous sont définies dans la portée globale (window)
+        // pour être accessibles par les attributs 'onload' des scripts.
+        window.gapiLoaded = function() {
             gapi.load('client', initializeGapiClient);
         }
 
-        // Callback function for gsi/client script
-        function gisLoaded() {
+        window.gisLoaded = function() {
             tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: CLIENT_ID,
                 scope: SCOPES,
@@ -1158,14 +1158,18 @@
                     const fileId = searchRes.result.files[0].id;
                     const res = await gapi.client.drive.files.get({ fileId: fileId, alt: 'media' });
                     
-                    if (res.status === 200 && res.result) {
+                    if (res.status === 200) {
                         try {
                             appState.journalEntries = res.result;
+                            if (!Array.isArray(appState.journalEntries)) {
+                                throw new Error('Loaded data is not an array.');
+                            }
+
                             saveJournalEntriesLocallyOnly();
                             loadData();
                             showToast("Journal loaded from Google Drive!", 'success');
                         } catch (jsonErr) {
-                            console.error("Failed to parse JSON from Drive:", jsonErr);
+                            console.error("Failed to process data from Drive:", jsonErr);
                             showToast("Failed to load journal: invalid file format.", 'error');
                             appState.journalEntries = [];
                             saveJournalEntriesLocallyOnly();
@@ -1389,7 +1393,6 @@
             }
         }
         
-
         async function getAppFolderId() {
             if (appFolderId) return appFolderId;
             try {
@@ -1485,11 +1488,7 @@
                     
                     if (res.status === 200) {
                         try {
-                            // res.result is already the JSON object from the file
-                            // no need for JSON.parse, it's already done by the gapi client
                             appState.journalEntries = res.result;
-
-                            // Ensure data is an array for safety
                             if (!Array.isArray(appState.journalEntries)) {
                                 throw new Error('Loaded data is not an array.');
                             }
