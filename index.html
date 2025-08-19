@@ -1289,6 +1289,7 @@
             return `faynalytics_journal_${googleUserId || 'local'}.json`;
         }
 
+        // Fonction corrigée
         async function saveJournalToDrive() {
             if (!googleAccessToken) return showToast("Please connect to Google Drive first.", 'warning');
             showLoading();
@@ -1298,22 +1299,18 @@
                 const fileContent = JSON.stringify(appState.journalEntries);
                 
                 const searchRes = await gapi.client.drive.files.list({
-                    q: `'${folderId}' in parents and name='${fileName}'`, fields: 'files(id)'
+                    q: `'${folderId}' in parents and name='${fileName}'`,
+                    fields: 'files(id)'
                 });
                 
                 const fileId = searchRes.result.files.length > 0 ? searchRes.result.files[0].id : null;
 
-                const metadata = { name: fileName, mimeType: 'application/json' };
-                const blob = new Blob([fileContent], { type: 'application/json' });
-                
-                const form = new FormData();
-                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                form.append('file', blob);
-
+                let metadata = { name: fileName, mimeType: 'application/json' };
                 let url;
                 let method;
+
                 if (fileId) {
-                    // Mise à jour d'un fichier existant : on n'ajoute pas le champ parents dans le corps
+                    // Mise à jour d'un fichier existant
                     url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
                     method = 'PATCH';
                 } else {
@@ -1321,15 +1318,22 @@
                     url = `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
                     method = 'POST';
                     metadata.parents = [folderId];
-                    // On recrée le FormData avec les parents pour la création
-                    const newForm = new FormData();
-                    newForm.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                    newForm.append('file', blob);
-                    form = newForm;
                 }
+
+                const blob = new Blob([fileContent], { type: 'application/json' });
+                const form = new FormData();
+                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                form.append('file', blob);
+
+                const res = await fetch(url, {
+                    method: method,
+                    headers: { 'Authorization': `Bearer ${googleAccessToken}` },
+                    body: form
+                });
                 
-                const res = await fetch(url, { method: method, headers: { 'Authorization': `Bearer ${googleAccessToken}` }, body: form });
-                if (!res.ok) throw new Error(await res.text());
+                if (!res.ok) {
+                    throw new Error(await res.text());
+                }
 
                 showToast("Journal saved successfully to Google Drive!", 'success');
             } catch (err) {
@@ -1341,6 +1345,7 @@
         }
 
 
+        // Fonction corrigée
         async function loadJournalFromDrive() {
             if (!googleAccessToken) return showToast("Please connect to Google Drive first.", 'warning');
             showLoading();
@@ -1349,27 +1354,35 @@
                 const fileName = getJournalFileName();
                 
                 const searchRes = await gapi.client.drive.files.list({
-                    q: `'${folderId}' in parents and name='${fileName}'`, fields: 'files(id)'
+                    q: `'${folderId}' in parents and name='${fileName}'`,
+                    fields: 'files(id)'
                 });
                 
                 if (searchRes.result.files.length > 0) {
                     const fileId = searchRes.result.files[0].id;
                     const res = await gapi.client.drive.files.get({ fileId: fileId, alt: 'media' });
                     
-                    // La vérification .ok est suffisante, l'erreur 200 vient du traitement suivant
-                    if (res.status === 200 && res.result) {
-                         appState.journalEntries = res.result;
-                         saveJournalEntriesLocallyOnly();
-                         loadData();
-                         showToast("Journal loaded from Google Drive!", 'success');
+                    if (res.status === 200) {
+                        // Tenter de parser le résultat comme JSON
+                        try {
+                            appState.journalEntries = res.result;
+                            if (appState.journalEntries.length > 0) {
+                                showToast("Journal loaded from Google Drive!", 'success');
+                            } else {
+                                showToast("Journal file found but is empty. Using local data.", 'info');
+                            }
+                        } catch (jsonErr) {
+                            // Si la réponse n'est pas un JSON valide
+                            console.error("Failed to parse JSON from Drive:", jsonErr);
+                            showToast("Failed to load journal: invalid file format.", 'error');
+                            appState.journalEntries = [];
+                        } finally {
+                            saveJournalEntriesLocallyOnly();
+                            loadData();
+                        }
                     } else {
-                        // Gérer les cas où le fichier est vide ou corrompu
-                        appState.journalEntries = [];
-                        saveJournalEntriesLocallyOnly();
-                        loadData();
-                        showToast("Journal file found but empty. Using local data.", 'info');
+                        throw new Error(`Failed to load file: ${res.status}`);
                     }
-                   
                 } else {
                     showToast("No journal file found on Google Drive. Using local data.", 'info');
                     loadJournalEntriesLocallyOnly();
@@ -1382,7 +1395,6 @@
                 hideLoading();
             }
         }
-
         // Calculator Logic
         function updateCalculatorUI() {
             const method = document.getElementById('stopLossInputMethod').value;
